@@ -39,9 +39,6 @@ const channelData = {
     }
 };
 
-// Bot instance
-let bot = null;
-
 // Function to process social links
 function processSocialLink(url, platform) {
     try {
@@ -81,29 +78,41 @@ function processSocialLink(url, platform) {
                 }
                 break;
                 
-            case 'facebook':
-                if (urlObj.hostname.includes('facebook.com')) {
-                    const username = urlObj.pathname.split('/')[1];
-                    return `https://facebook.com/${username}`;
-                }
-                break;
-                
-            case 'instagram':
-                if (urlObj.hostname.includes('instagram.com')) {
-                    const username = urlObj.pathname.split('/')[1];
-                    return `https://instagram.com/${username}`;
+            case 'website':
+                const commonTLDs = ['.xyz', '.com', '.io', '.org', '.net'];
+                if (commonTLDs.some(tld => urlObj.hostname.endsWith(tld)) && 
+                    !urlObj.hostname.includes('twitter') &&
+                    !urlObj.hostname.includes('x.com') &&
+                    !urlObj.hostname.includes('t.me') &&
+                    !urlObj.hostname.includes('discord') &&
+                    !urlObj.hostname.includes('dextools') &&
+                    !urlObj.hostname.includes('dexscreener') &&
+                    !urlObj.hostname.includes('defined.fi')) {
+                    return url;
                 }
                 break;
                 
             case 'chart':
-                const chartPlatforms = ['dextools.io', 'dexscreener.com', 'poocoin.app'];
+                const chartPlatforms = [
+                    'dextools.io',
+                    'dexscreener.com',
+                    'poocoin.app',
+                    'defined.fi',
+                    'solscan.io',
+                    'birdeye.so'
+                ];
                 if (chartPlatforms.some(platform => urlObj.hostname.includes(platform))) {
                     return url;
                 }
                 break;
                 
             case 'swap':
-                const swapPlatforms = ['pancakeswap.finance', 'uniswap.org'];
+                const swapPlatforms = [
+                    'pancakeswap.finance',
+                    'uniswap.org',
+                    'raydium.io',
+                    'jupiter.exchange'
+                ];
                 if (swapPlatforms.some(platform => urlObj.hostname.includes(platform))) {
                     return url;
                 }
@@ -117,32 +126,40 @@ function processSocialLink(url, platform) {
 
 // Function to process message for links
 function processMessageForLinks(text) {
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const urlRegex = /(https?:\/\/[^\s\)]+)/g;
     const links = text.match(urlRegex);
     
     if (links) {
         links.forEach(link => {
-            const twitterLink = processSocialLink(link, 'twitter');
-            const redditLink = processSocialLink(link, 'reddit');
-            const discordLink = processSocialLink(link, 'discord');
-            const telegramLink = processSocialLink(link, 'telegram');
-            const facebookLink = processSocialLink(link, 'facebook');
-            const instagramLink = processSocialLink(link, 'instagram');
-            const chartLink = processSocialLink(link, 'chart');
-            const swapLink = processSocialLink(link, 'swap');
+            // Clean the URL
+            const cleanLink = link.replace(/\)$/, '');
             
+            // Check for context
+            const isWebsite = text.toLowerCase().includes('website') || text.toLowerCase().includes('🌐');
+            const isChart = text.toLowerCase().includes('chart') || text.toLowerCase().includes('📊');
+            const isSwap = text.toLowerCase().includes('trade') || text.toLowerCase().includes('swap');
+            
+            // Process links
+            const twitterLink = processSocialLink(cleanLink, 'twitter');
+            const telegramLink = processSocialLink(cleanLink, 'telegram');
+            const discordLink = processSocialLink(cleanLink, 'discord');
+            const chartLink = processSocialLink(cleanLink, 'chart');
+            const swapLink = processSocialLink(cleanLink, 'swap');
+            const websiteLink = processSocialLink(cleanLink, 'website');
+            
+            // Add to appropriate category
             if (twitterLink) channelData.links.twitter.add(twitterLink);
-            else if (redditLink) channelData.links.reddit.add(redditLink);
-            else if (discordLink) channelData.links.discord.add(discordLink);
             else if (telegramLink) channelData.links.telegram.add(telegramLink);
-            else if (facebookLink) channelData.links.facebook.add(facebookLink);
-            else if (instagramLink) channelData.links.instagram.add(instagramLink);
-            else if (chartLink) channelData.links.chart.add(chartLink);
-            else if (swapLink) channelData.links.swap.add(swapLink);
-            else channelData.links.other.add(link);
+            else if (discordLink) channelData.links.discord.add(discordLink);
+            else if (chartLink || isChart) channelData.links.chart.add(cleanLink);
+            else if (swapLink || isSwap) channelData.links.swap.add(cleanLink);
+            else if (websiteLink || isWebsite) channelData.links.website.add(cleanLink);
         });
     }
 }
+
+// Bot instance
+let bot = null;
 
 // Function to create and initialize bot
 function initializeBot() {
@@ -225,7 +242,7 @@ function initializeBot() {
                 }
             }
 
-            // Process recent messages
+            // Process messages
             let messages = [];
             try {
                 const updates = await bot.getUpdates({
@@ -237,7 +254,6 @@ function initializeBot() {
                 console.error('Error fetching history:', error);
             }
 
-            // Process found messages
             messages.forEach(message => {
                 if (message.text) {
                     channelData.messageCount++;
@@ -338,11 +354,9 @@ function formatLinks(links) {
     let output = '';
     
     if (links.twitter.size) output += `\nTwitter: ${Array.from(links.twitter)[0]}`;
-    if (links.reddit.size) output += `\nReddit: ${Array.from(links.reddit)[0]}`;
-    if (links.discord.size) output += `\nDiscord: ${Array.from(links.discord)[0]}`;
     if (links.telegram.size) output += `\nTelegram: ${Array.from(links.telegram)[0]}`;
-    if (links.facebook.size) output += `\nFacebook: ${Array.from(links.facebook)[0]}`;
-    if (links.instagram.size) output += `\nInstagram: ${Array.from(links.instagram)[0]}`;
+    if (links.discord.size) output += `\nDiscord: ${Array.from(links.discord)[0]}`;
+    if (links.website.size) output += `\nWebsite: ${Array.from(links.website)[0]}`;
     if (links.chart.size) output += `\nChart: ${Array.from(links.chart)[0]}`;
     if (links.swap.size) output += `\nSwap: ${Array.from(links.swap)[0]}`;
     
