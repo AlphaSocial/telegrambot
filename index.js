@@ -1,10 +1,23 @@
 const TelegramBot = require('node-telegram-bot-api');
+const express = require('express');
 require('dotenv').config();
 
-// Create bot with ONLY polling
+// Express setup
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+    res.send('Bot is running!');
+});
+
+app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+});
+
+// Create bot with polling
 const bot = new TelegramBot(process.env.BOT_TOKEN, { 
     polling: true,
-    filepath: false // Disable file handling to improve performance
+    filepath: false
 });
 
 // Simple in-memory storage
