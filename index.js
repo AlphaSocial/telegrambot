@@ -14,19 +14,34 @@ app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
 });
 
-// Create bot with polling
-const bot = new TelegramBot(process.env.BOT_TOKEN, { 
-    polling: true,
-    filepath: false
-});
-
-// Simple in-memory storage
+// Enhanced in-memory storage
 const channelData = {
     chatId: null,
     messageCount: 0,
     links: [],
-    updates: []
+    updates: [],
+    channelInfo: {
+        title: null,
+        username: null,
+        description: null,
+        photoUrl: null,
+        website: null,
+        pinnedMessages: []
+    }
 };
+
+// Create bot with enhanced polling options
+const bot = new TelegramBot(process.env.BOT_TOKEN, {
+    polling: {
+        interval: 300,
+        autoStart: true,
+        params: {
+            timeout: 10,
+            allowed_updates: ['message', 'channel_post', 'edited_channel_post']
+        }
+    },
+    filepath: false
+});
 
 // Command regex patterns
 const startRegex = /^\/start(@AlphaSocialV2Bot)?$/;
@@ -48,21 +63,89 @@ bot.onText(startRegex, (msg) => {
     );
 });
 
-// Connect command
-bot.onText(connectRegex, (msg) => {
-    channelData.chatId = msg.chat.id;
-    channelData.messageCount = 0;
-    channelData.links = [];
-    channelData.updates = [];
-    
-    bot.sendMessage(msg.chat.id,
-        '✅ Channel connected!\n\n' +
-        'I\'m now tracking:\n' +
-        '• Project links & socials\n' +
-        '• Important updates\n' +
-        '• Community metrics\n\n' +
-        'Use /status to see captured data!'
-    );
+// Connect command with history fetching
+bot.onText(connectRegex, async (msg) => {
+    try {
+        channelData.chatId = msg.chat.id;
+        
+        // Get channel info
+        const chat = await bot.getChat(msg.chat.id);
+        channelData.channelInfo.title = chat.title;
+        channelData.channelInfo.username = chat.username;
+        channelData.channelInfo.description = chat.description;
+        
+        // Get channel photo if available
+        if (chat.photo) {
+            const photoFile = await bot.getFile(chat.photo.big_file_id);
+            channelData.channelInfo.photoUrl = photoFile.file_path;
+        }
+        
+        // Get pinned messages
+        try {
+            const pinnedMessage = await bot.getPinnedMessage(msg.chat.id);
+            if (pinnedMessage) {
+                channelData.channelInfo.pinnedMessages.push(pinnedMessage);
+            }
+        } catch (error) {
+            console.log('No pinned message found');
+        }
+        
+        // Get recent messages
+        let messages = [];
+        try {
+            const updates = await bot.getUpdates({
+                offset: -1,
+                limit: 100
+            });
+            messages = updates.map(update => update.message).filter(Boolean);
+        } catch (error) {
+            console.error('Error fetching history:', error);
+        }
+
+        // Process found messages
+        messages.forEach(message => {
+            if (message.text) {
+                channelData.messageCount++;
+                
+                // Track links
+                const urlRegex = /(https?:\/\/[^\s]+)/g;
+                const links = message.text.match(urlRegex);
+                if (links) {
+                    channelData.links.push(...links);
+                }
+                
+                // Track updates
+                if (isImportantUpdate(message.text)) {
+                    channelData.updates.push({
+                        text: message.text,
+                        date: new Date(message.date * 1000)
+                    });
+                }
+
+                // Look for website in messages
+                if (!channelData.channelInfo.website && message.text.includes('website')) {
+                    const possibleWebsite = message.text.match(urlRegex);
+                    if (possibleWebsite) {
+                        channelData.channelInfo.website = possibleWebsite[0];
+                    }
+                }
+            }
+        });
+
+        bot.sendMessage(msg.chat.id,
+            '✅ Channel connected!\n\n' +
+            'I\'ve analyzed your channel and found:\n' +
+            `• Channel: ${channelData.channelInfo.title}\n` +
+            `• Description: ${channelData.channelInfo.description || 'Not set'}\n` +
+            `• Messages analyzed: ${channelData.messageCount}\n` +
+            `• Links found: ${channelData.links.length}\n` +
+            `• Updates detected: ${channelData.updates.length}\n\n` +
+            'Use /status to see detailed data!'
+        );
+    } catch (error) {
+        console.error('Connection error:', error);
+        bot.sendMessage(msg.chat.id, '❌ Error connecting to channel. Please try again.');
+    }
 });
 
 // Status command
@@ -75,8 +158,12 @@ bot.onText(statusRegex, (msg) => {
         return;
     }
 
+    const channelInfo = channelData.channelInfo;
     bot.sendMessage(msg.chat.id,
         '📊 Channel Status:\n\n' +
+        `Channel: ${channelInfo.title}\n` +
+        `Username: @${channelInfo.username}\n` +
+        `Website: ${channelInfo.website || 'Not found'}\n\n` +
         `Messages Tracked: ${channelData.messageCount}\n` +
         `Links Found: ${channelData.links.length}\n` +
         `Updates Detected: ${channelData.updates.length}\n\n` +
