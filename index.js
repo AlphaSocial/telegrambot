@@ -14,8 +14,21 @@ app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
 });
 
-// Enhanced in-memory storage with multiple channels
-const channelsData = new Map();
+// Enhanced in-memory storage
+const channelData = {
+    chatId: null,
+    messageCount: 0,
+    links: [],
+    updates: [],
+    channelInfo: {
+        title: null,
+        username: null,
+        description: null,
+        photoUrl: null,
+        website: null,
+        pinnedMessages: []
+    }
+};
 
 // Create bot with enhanced polling options
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
@@ -36,71 +49,27 @@ const connectRegex = /^\/connect(@AlphaSocialV2Bot)?$/;
 const statusRegex = /^\/status(@AlphaSocialV2Bot)?$/;
 
 // Start command
-bot.onText(startRegex, async (msg) => {
-    try {
-        const chatId = msg.chat.id;
-        const chatType = msg.chat.type;
-
-        if (chatType === 'private') {
-            bot.sendMessage(chatId, 
-                '👋 Welcome to Alpha Social Bot!\n\n' +
-                '🔸 To use me:\n' +
-                '1. Add me to your channel\n' +
-                '2. Make me an admin\n' +
-                '3. Send /connect in the channel\n\n' +
-                '📌 Available Commands:\n' +
-                '/start - Show this message\n' +
-                '/connect - Connect a channel\n' +
-                '/status - View channel data'
-            );
-        } else {
-            // For channels and groups
-            const botMember = await bot.getChatMember(chatId, bot.token.split(':')[0]);
-            if (!botMember.can_post_messages) {
-                bot.sendMessage(chatId, '❌ Please make me an admin with posting permissions first!');
-                return;
-            }
-            
-            bot.sendMessage(chatId,
-                '👋 Hello! Use /connect to start tracking this channel/group.'
-            );
-        }
-    } catch (error) {
-        console.error('Start command error:', error);
-    }
+bot.onText(startRegex, (msg) => {
+    bot.sendMessage(msg.chat.id, 
+        '👋 Welcome to Alpha Social Bot!\n\n' +
+        '🔸 Available Commands:\n' +
+        '/start - Show this message\n' +
+        '/connect - Connect your channel\n' +
+        '/status - View captured data\n\n' +
+        '📌 To get started:\n' +
+        '1. Add me to your project channel\n' +
+        '2. Make me an admin\n' +
+        '3. Use /connect to start tracking'
+    );
 });
 
-// Connect command
+// Connect command with history fetching
 bot.onText(connectRegex, async (msg) => {
     try {
-        const chatId = msg.chat.id;
-
-        // Check bot permissions
-        const botMember = await bot.getChatMember(chatId, bot.token.split(':')[0]);
-        if (!botMember.can_post_messages) {
-            bot.sendMessage(chatId, '❌ Please make me an admin with posting permissions first!');
-            return;
-        }
-
-        // Initialize channel data structure
-        channelsData.set(chatId, {
-            messageCount: 0,
-            links: [],
-            updates: [],
-            channelInfo: {
-                title: null,
-                username: null,
-                description: null,
-                photoUrl: null,
-                website: null,
-                pinnedMessages: []
-            }
-        });
-
-        const channelData = channelsData.get(chatId);
+        channelData.chatId = msg.chat.id;
         
         // Get channel info
-        const chat = await bot.getChat(chatId);
+        const chat = await bot.getChat(msg.chat.id);
         channelData.channelInfo.title = chat.title;
         channelData.channelInfo.username = chat.username;
         channelData.channelInfo.description = chat.description;
@@ -113,23 +82,57 @@ bot.onText(connectRegex, async (msg) => {
         
         // Get pinned messages
         try {
-            const pinnedMessage = await bot.getPinnedMessage(chatId);
+            const pinnedMessage = await bot.getPinnedMessage(msg.chat.id);
             if (pinnedMessage) {
                 channelData.channelInfo.pinnedMessages.push(pinnedMessage);
             }
         } catch (error) {
             console.log('No pinned message found');
         }
-
-        // Process existing messages
+        
+        // Get recent messages
+        let messages = [];
         try {
-            const messages = await getChannelMessages(chatId);
-            processMessages(messages, channelData);
+            const updates = await bot.getUpdates({
+                offset: -1,
+                limit: 100
+            });
+            messages = updates.map(update => update.message).filter(Boolean);
         } catch (error) {
-            console.error('Error processing messages:', error);
+            console.error('Error fetching history:', error);
         }
 
-        bot.sendMessage(chatId,
+        // Process found messages
+        messages.forEach(message => {
+            if (message.text) {
+                channelData.messageCount++;
+                
+                // Track links
+                const urlRegex = /(https?:\/\/[^\s]+)/g;
+                const links = message.text.match(urlRegex);
+                if (links) {
+                    channelData.links.push(...links);
+                }
+                
+                // Track updates
+                if (isImportantUpdate(message.text)) {
+                    channelData.updates.push({
+                        text: message.text,
+                        date: new Date(message.date * 1000)
+                    });
+                }
+
+                // Look for website in messages
+                if (!channelData.channelInfo.website && message.text.includes('website')) {
+                    const possibleWebsite = message.text.match(urlRegex);
+                    if (possibleWebsite) {
+                        channelData.channelInfo.website = possibleWebsite[0];
+                    }
+                }
+            }
+        });
+
+        bot.sendMessage(msg.chat.id,
             '✅ Channel connected!\n\n' +
             'I\'ve analyzed your channel and found:\n' +
             `• Channel: ${channelData.channelInfo.title}\n` +
@@ -147,11 +150,8 @@ bot.onText(connectRegex, async (msg) => {
 
 // Status command
 bot.onText(statusRegex, (msg) => {
-    const chatId = msg.chat.id;
-    const channelData = channelsData.get(chatId);
-
-    if (!channelData) {
-        bot.sendMessage(chatId,
+    if (channelData.chatId !== msg.chat.id) {
+        bot.sendMessage(msg.chat.id,
             '❌ Channel not connected!\n\n' +
             'Please use /connect first to start tracking.'
         );
@@ -159,10 +159,10 @@ bot.onText(statusRegex, (msg) => {
     }
 
     const channelInfo = channelData.channelInfo;
-    bot.sendMessage(chatId,
+    bot.sendMessage(msg.chat.id,
         '📊 Channel Status:\n\n' +
         `Channel: ${channelInfo.title}\n` +
-        `Username: ${channelInfo.username ? '@' + channelInfo.username : 'Not set'}\n` +
+        `Username: @${channelInfo.username}\n` +
         `Website: ${channelInfo.website || 'Not found'}\n\n` +
         `Messages Tracked: ${channelData.messageCount}\n` +
         `Links Found: ${channelData.links.length}\n` +
@@ -174,25 +174,9 @@ bot.onText(statusRegex, (msg) => {
 
 // Message tracking
 bot.on('message', (msg) => {
-    const chatId = msg.chat.id;
-    const channelData = channelsData.get(chatId);
-    
-    if (channelData && msg.text) {
-        processMessage(msg, channelData);
-    }
-});
-
-// Helper functions
-async function getChannelMessages(chatId) {
-    // This is a placeholder - Telegram doesn't provide direct API for message history
-    // You might need to implement alternative methods to get historical messages
-    return [];
-}
-
-function processMessage(msg, channelData) {
-    channelData.messageCount++;
-    
-    if (msg.text) {
+    if (msg.chat.id === channelData.chatId && msg.text) {
+        channelData.messageCount++;
+        
         // Track links
         const urlRegex = /(https?:\/\/[^\s]+)/g;
         const links = msg.text.match(urlRegex);
@@ -204,24 +188,13 @@ function processMessage(msg, channelData) {
         if (isImportantUpdate(msg.text)) {
             channelData.updates.push({
                 text: msg.text,
-                date: new Date(msg.date * 1000)
+                date: new Date()
             });
         }
-
-        // Look for website
-        if (!channelData.channelInfo.website && msg.text.includes('website')) {
-            const possibleWebsite = msg.text.match(urlRegex);
-            if (possibleWebsite) {
-                channelData.channelInfo.website = possibleWebsite[0];
-            }
-        }
     }
-}
+});
 
-function processMessages(messages, channelData) {
-    messages.forEach(msg => processMessage(msg, channelData));
-}
-
+// Helper functions
 function isImportantUpdate(text) {
     const keywords = ['launch', 'update', 'announcement', 'release'];
     return keywords.some(keyword => text.toLowerCase().includes(keyword));
